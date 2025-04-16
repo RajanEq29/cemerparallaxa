@@ -1,145 +1,93 @@
-import React, { useState, useEffect, useRef } from 'react';
-
-import { StyleSheet, View, TouchableWithoutFeedback, Text } from 'react-native';
-import { Camera, CameraView } from 'expo-camera';
-import { Gyroscope } from 'expo-sensors';
-import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
-import axios from 'axios';
-import * as FileSystem from 'expo-file-system'
-import HomeScreen from './model/model';
+import React, { useEffect, useState, useRef } from 'react';
+import { StyleSheet, Text, View, ActivityIndicator, TouchableOpacity, Image, Alert } from 'react-native';
+import { Camera, CameraView } from 'expo-camera';  // Using expo-camera here
+import * as tf from '@tensorflow/tfjs';
+import * as tfReactNative from '@tensorflow/tfjs-react-native';
+import * as cocoSsd from '@tensorflow-models/coco-ssd';
+import { cameraWithTensors } from '@tensorflow/tfjs-react-native';
+import VideoWithmodelRe from './screens/VideoWithmodelRe';
 
 export default function App() {
-  const [hasPermission, setHasPermission] = useState(null);
-  const cameraRef = useRef(null);
-  const gyroX = useSharedValue(0);
-  const gyroY = useSharedValue(0);
-  const [imageUrl, setImageUrl] = useState(null);
-  const [tags, setTags] = useState([]);
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [isTfReady, setIsTfReady] = useState(false);
+  const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
+  const [predictions, setPredictions] = useState<any[]>([]);
+
+  const cameraRef = useRef<any>(null);  // cameraWithTensors doesn't use CameraView
+  const frameId = useRef<any>(null); // To store the animation frame ID for real-time detection
+console.log(predictions)
+console.log('------------------->',frameId)
   useEffect(() => {
     (async () => {
-      const { status } = await Camera.requestCameraPermissionsAsync();
-      setHasPermission(status === 'granted');
+      try {
+        const { status } = await Camera.requestCameraPermissionsAsync();
+        setHasPermission(status === 'granted');
+
+        await tf.ready();  // Initialize TensorFlow
+        await tf.setBackend('rn-webgl');  // Set TensorFlow backend to WebGL
+        console.log('TensorFlow backend set to rn-webgl');
+
+        const loadedModel = await cocoSsd.load();
+        setModel(loadedModel);  // Load object detection model
+        console.log('Model loaded');
+        setIsTfReady(true);
+      } catch (error) {
+        console.error('Initialization error:', error);
+      }
     })();
-
-    const subscription = Gyroscope.addListener(({ x, y }) => {
-      gyroX.value = x * 50; // Scale for parallax effect
-      gyroY.value = y * 50;
-    });
-
-    Gyroscope.setUpdateInterval(16); // Update every 16ms (~60fps)
-
-    return () => subscription.remove();
   }, []);
 
-  const animatedStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { translateX: withSpring(gyroX.value) },
-        { translateY: withSpring(gyroY.value) },
-      ],
-    };
-  });
+  const handleCameraStream = async (tensor: any) => {
+    if (model && tensor) {
+      try {
+        // Run object detection on the current frame
+        const predictions = await model.detect(tensor);
+        setPredictions(predictions);
+      } catch (error) {
+        console.error('Error during detection:', error);
+      }
+    }
+  };
 
-  // const handleBackgroundPress = async () => {
-  //   if (cameraRef.current) {
-  //     try {
-  //       const photo = await Promise.race([
-  //         cameraRef.current.takePictureAsync({ quality: 0.5 }),
-  //         new Promise((_, reject) =>
-  //           setTimeout(() => reject(new Error('Timeout: Photo not taken within 2 seconds')), 2000)
-  //         ),
-  //       ]);
-  //       console.log('Captured Image Data:', {
-  //         uri: photo.uri,
-  //         width: photo.width,
-  //         height: photo.height,
-  //         base64: photo.base64 ? 'Available (truncated)' : 'Not included',
-  //       });
-  //       try {
-  //         if (!photo.uri) {
-  //           alert('Please select an image first!');
-  //           return;
-  //         }
-    
-  //         // Check if the file exists
-  //         const fileInfo = await FileSystem.getInfoAsync(photo.uri);
-  //         if (!fileInfo.exists) {
-  //           console.error('File not found at:', photo.uri);
-  //           alert('Image file not found! It may have been moved or deleted.');
-  //           return;
-  //         }
-    
-          // const API_KEY = 'acc_854438e1b93147e';
-          // const API_SECRET = '86efb9625ebd0cd694c788fe00196cab';
-  //         const API_KEY='acc_9319906490b55e0';
-  //         const API_SECRET='67478c69a7a12d8b3e0f5b0283438c1c';
-  //         const authString = `${API_KEY}:${API_SECRET}`;
-  //         const auth = 'Basic ' + btoa(authString);
-    
-  //         const base64ImageData = await FileSystem.readAsStringAsync(photo.uri, {
-  //           encoding: FileSystem.EncodingType.Base64,
-  //         });
-    
-  //         const formData = new FormData();
-  //         formData.append('image_base64', base64ImageData);
-    
-  //         const uploadResponse = await axios.post(
-  //           'https://api.imagga.com/v2/uploads',
-  //           formData,
-  //           {
-  //             headers: {
-  //               Authorization: auth,
-  //               'Content-Type': 'multipart/form-data',
-  //             },
-  //           }
-  //         );
-    
-  //         const uploadId = uploadResponse.data.result.upload_id;
-    
-  //         const tagsResponse = await axios.get(
-  //           `https://api.imagga.com/v2/tags?image_upload_id=${uploadId}`,
-  //           {
-  //             headers: {
-  //               Authorization: auth,
-  //             },
-  //           }
-  //         );
-    
-  //         const detectedTags = tagsResponse.data.result.tags.slice(0, 5);
-  //         setTags(detectedTags);
-  //       } catch (error) {
-  //         console.error('Analyze image error:', error.response?.data || error.message);
-  //         alert('Error analyzing image: ' + (error.response?.data?.status?.text || error.message));
-  //       }
-       
-  //     } catch (error) {
-  //       console.error('Error taking picture:', error.message);
-  //     }
-  //   }
-  // };
+  if (hasPermission === null || !isTfReady || !model) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#00ff00" />
+        <Text style={styles.loadingText}>Initializing TensorFlow and loading model...</Text>
+      </View>
+    );
+  }
 
-  if (hasPermission === null) {
-    return <View />;
-  }
-  if (hasPermission === false) {
-    return <Text>No access to camera</Text>;
-  }
+  const CameraWithTensor = cameraWithTensors(CameraView);  // Wrapping the Camera component with tensors stream
 
   return (
     <View style={styles.container}>
-      <TouchableWithoutFeedback >
-        <CameraView style={styles.camera} ref={cameraRef}>
-          <View style={styles.overlay}>
-            <Animated.Text style={[styles.overlayText, animatedStyle]}>
-            <HomeScreen></HomeScreen>
-            </Animated.Text> 
-        
-            
-            {/* <HomeScreen></HomeScreen> */}
-          </View>
-        </CameraView>
-      </TouchableWithoutFeedback>
-      {/* <HomeScreen></HomeScreen> */}
+      <CameraWithTensor
+        ref={cameraRef}
+        style={styles.camera}
+        type="back"
+        onTensorReady={handleCameraStream}  // Callback to handle real-time tensor data
+        cameraTextureHeight={1200}
+        cameraTextureWidth={1600}
+        resizeHeight={300}
+        resizeWidth={300}
+        resizeDepth= {3}  // RGB image depth
+        onFrame={handleCameraStream} // Continuously process the frames
+      />
+      <TouchableOpacity onPress={() => Alert.alert("hi rajan singh")} style={styles.captureButton}>
+        <Text style={styles.captureText}>Real-Time Detection</Text>
+      </TouchableOpacity>
+
+      {predictions.length > 0 && (
+        <View style={styles.predictionsBox}>
+          <Text style={styles.predictionsTitle}>Predictions:</Text>
+          {predictions.map((p, idx) => (
+            <Text key={idx} style={styles.predictionText}>
+              {`${p.class} (${(p.score * 100).toFixed(2)}%)`}
+            </Text>
+          ))}
+        </View>
+      )}
     </View>
   );
 }
@@ -147,25 +95,50 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#000',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   camera: {
     flex: 1,
+    width: '100%',
   },
-  overlay: {
+  captureButton: {
+    position: 'absolute',
+    bottom: 40,
+    backgroundColor: '#00ff00',
+    padding: 15,
+    borderRadius: 12,
+    zIndex: 100,
+  },
+  captureText: {
+    color: '#000',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#000',
   },
-  overlayText: {
-    fontSize: 30,
-    color: 'white',
-    fontWeight: 'bold',
-    textAlign: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.3)', // Optional: Add slight background for visibility
-  },
-  debugText: {
-    fontSize: 20,
-    color: 'yellow',
+  loadingText: {
+    color: '#fff',
+    fontSize: 16,
     marginTop: 10,
+  },
+  predictionsBox: {
+    marginTop: 10,
+    backgroundColor: '#eee',
+    padding: 10,
+    borderRadius: 8,
+    width: 300,
+  },
+  predictionsTitle: {
+    fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  predictionText: {
+    color: '#333',
   },
 });
