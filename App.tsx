@@ -1,145 +1,133 @@
-import React, { useState, useEffect, useRef } from 'react';
-
-import { StyleSheet, View, TouchableWithoutFeedback, Text } from 'react-native';
+import * as cocoSsd from '@tensorflow-models/coco-ssd';
+import * as tf from '@tensorflow/tfjs';
+import { cameraWithTensors } from '@tensorflow/tfjs-react-native';
 import { Camera, CameraView } from 'expo-camera';
-import { Gyroscope } from 'expo-sensors';
-import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
-import axios from 'axios';
-import * as FileSystem from 'expo-file-system'
-import HomeScreen from './model/model';
+import React, { useEffect, useRef, useState } from 'react';
+import { Dimensions, LogBox, Platform, StyleSheet, View } from 'react-native';
+import Canvas from 'react-native-canvas'
+
+const TensorCamera = cameraWithTensors(CameraView);
+
+LogBox.ignoreAllLogs(true);
+
+const { width, height } = Dimensions.get('window');
 
 export default function App() {
-  const [hasPermission, setHasPermission] = useState(null);
-  const cameraRef = useRef(null);
-  const gyroX = useSharedValue(0);
-  const gyroY = useSharedValue(0);
-  const [imageUrl, setImageUrl] = useState(null);
-  const [tags, setTags] = useState([]);
+  const [model, setModel] = useState<cocoSsd.ObjectDetection>();
+  let context = useRef<CanvasRenderingContext2D>();
+  const canvas = useRef<Canvas>();
+
+  function handleCameraStream(images: any) {
+    const loop = async () => {
+      const nextImageTensor = images.next().value;
+
+      if (!model || !nextImageTensor) throw new Error('no model');
+
+      model
+        .detect(nextImageTensor)
+        .then((predictions) => {
+          drawRectangle(predictions, nextImageTensor);
+        })
+        .catch((err) => {
+          console.log(err);
+        });
+
+      requestAnimationFrame(loop);
+    };
+    loop();
+  }
+
+  function drawRectangle(
+    predictions: cocoSsd.DetectedObject[],
+    nextImageTensor: any
+  ) {
+    if (!context.current || !canvas.current) {
+      console.log('no context or canvas');
+      return;
+    }
+
+    console.log(predictions);
+
+    // to match the size of the camera preview
+    const scaleWidth = width / nextImageTensor.shape[1];
+    const scaleHeight = height / nextImageTensor.shape[0];
+
+    const flipHorizontal = Platform.OS === 'ios' ? false : true;
+
+    // We will clear the previous prediction
+    context.current.clearRect(0, 0, width, height);
+
+    // Draw the rectangle for each prediction
+    for (const prediction of predictions) {
+      const [x, y, width, height] = prediction.bbox;
+
+      // Scale the coordinates based on the ratios calculated
+      const boundingBoxX = flipHorizontal
+        ? canvas.current.width - x * scaleWidth - width * scaleWidth
+        : x * scaleWidth;
+      const boundingBoxY = y * scaleHeight;
+
+      // Draw the bounding box.
+      context.current.strokeRect(
+        boundingBoxX,
+        boundingBoxY,
+        width * scaleWidth,
+        height * scaleHeight
+      );
+      // Draw the label
+      context.current.fillText(
+        prediction.class,
+        boundingBoxX - 5,
+        boundingBoxY - 5
+      );
+    }
+  }
+
+  const handleCanvas = async (can: Canvas) => {
+    if (can) {
+      can.width = width;
+      can.height = height;
+      const ctx: CanvasRenderingContext2D = can.getContext('2d');
+      context.current = ctx;
+      ctx.strokeStyle = 'red';
+      ctx.fillStyle = 'red';
+      ctx.lineWidth = 3;
+      canvas.current = can;
+    }
+  };
+
+  let textureDims;
+  Platform.OS === 'ios'
+    ? (textureDims = { height: 1920, width: 1080 })
+    : (textureDims = { height: 1200, width: 1600 });
+
   useEffect(() => {
     (async () => {
       const { status } = await Camera.requestCameraPermissionsAsync();
-      setHasPermission(status === 'granted');
+      await tf.ready();
+      setModel(await cocoSsd.load());
     })();
-
-    const subscription = Gyroscope.addListener(({ x, y }) => {
-      gyroX.value = x * 50; // Scale for parallax effect
-      gyroY.value = y * 50;
-    });
-
-    Gyroscope.setUpdateInterval(16); // Update every 16ms (~60fps)
-
-    return () => subscription.remove();
   }, []);
-
-  const animatedStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { translateX: withSpring(gyroX.value) },
-        { translateY: withSpring(gyroY.value) },
-      ],
-    };
-  });
-
-  // const handleBackgroundPress = async () => {
-  //   if (cameraRef.current) {
-  //     try {
-  //       const photo = await Promise.race([
-  //         cameraRef.current.takePictureAsync({ quality: 0.5 }),
-  //         new Promise((_, reject) =>
-  //           setTimeout(() => reject(new Error('Timeout: Photo not taken within 2 seconds')), 2000)
-  //         ),
-  //       ]);
-  //       console.log('Captured Image Data:', {
-  //         uri: photo.uri,
-  //         width: photo.width,
-  //         height: photo.height,
-  //         base64: photo.base64 ? 'Available (truncated)' : 'Not included',
-  //       });
-  //       try {
-  //         if (!photo.uri) {
-  //           alert('Please select an image first!');
-  //           return;
-  //         }
-    
-  //         // Check if the file exists
-  //         const fileInfo = await FileSystem.getInfoAsync(photo.uri);
-  //         if (!fileInfo.exists) {
-  //           console.error('File not found at:', photo.uri);
-  //           alert('Image file not found! It may have been moved or deleted.');
-  //           return;
-  //         }
-    
-          // const API_KEY = 'acc_854438e1b93147e';
-          // const API_SECRET = '86efb9625ebd0cd694c788fe00196cab';
-  //         const API_KEY='acc_9319906490b55e0';
-  //         const API_SECRET='67478c69a7a12d8b3e0f5b0283438c1c';
-  //         const authString = `${API_KEY}:${API_SECRET}`;
-  //         const auth = 'Basic ' + btoa(authString);
-    
-  //         const base64ImageData = await FileSystem.readAsStringAsync(photo.uri, {
-  //           encoding: FileSystem.EncodingType.Base64,
-  //         });
-    
-  //         const formData = new FormData();
-  //         formData.append('image_base64', base64ImageData);
-    
-  //         const uploadResponse = await axios.post(
-  //           'https://api.imagga.com/v2/uploads',
-  //           formData,
-  //           {
-  //             headers: {
-  //               Authorization: auth,
-  //               'Content-Type': 'multipart/form-data',
-  //             },
-  //           }
-  //         );
-    
-  //         const uploadId = uploadResponse.data.result.upload_id;
-    
-  //         const tagsResponse = await axios.get(
-  //           `https://api.imagga.com/v2/tags?image_upload_id=${uploadId}`,
-  //           {
-  //             headers: {
-  //               Authorization: auth,
-  //             },
-  //           }
-  //         );
-    
-  //         const detectedTags = tagsResponse.data.result.tags.slice(0, 5);
-  //         setTags(detectedTags);
-  //       } catch (error) {
-  //         console.error('Analyze image error:', error.response?.data || error.message);
-  //         alert('Error analyzing image: ' + (error.response?.data?.status?.text || error.message));
-  //       }
-       
-  //     } catch (error) {
-  //       console.error('Error taking picture:', error.message);
-  //     }
-  //   }
-  // };
-
-  if (hasPermission === null) {
-    return <View />;
-  }
-  if (hasPermission === false) {
-    return <Text>No access to camera</Text>;
-  }
+  console.log(model?.data)
 
   return (
     <View style={styles.container}>
-      <TouchableWithoutFeedback >
-        <CameraView style={styles.camera} ref={cameraRef}>
-          <View style={styles.overlay}>
-            <Animated.Text style={[styles.overlayText, animatedStyle]}>
-            <HomeScreen></HomeScreen>
-            </Animated.Text> 
-        
-            
-            {/* <HomeScreen></HomeScreen> */}
-          </View>
-        </CameraView>
-      </TouchableWithoutFeedback>
-      {/* <HomeScreen></HomeScreen> */}
+      <TensorCamera
+        // Standard Camera props
+        style={styles.camera}
+   
+        // Tensor related props
+        cameraTextureHeight={textureDims.height}
+        cameraTextureWidth={textureDims.width}
+        resizeHeight={200}
+        resizeWidth={152}
+        resizeDepth={3}
+        onReady={handleCameraStream}
+        autorender={true}
+        useCustomShadersToResize={false}
+      />
+
+      <Canvas style={styles.canvas} ref={handleCanvas} />
     </View>
   );
 }
@@ -147,25 +135,16 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#fff',
   },
   camera: {
-    flex: 1,
+    width: '100%',
+    height: '100%',
   },
-  overlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  overlayText: {
-    fontSize: 30,
-    color: 'white',
-    fontWeight: 'bold',
-    textAlign: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.3)', // Optional: Add slight background for visibility
-  },
-  debugText: {
-    fontSize: 20,
-    color: 'yellow',
-    marginTop: 10,
+  canvas: {
+    position: 'absolute',
+    zIndex: 1000000,
+    width: '100%',
+    height: '100%',
   },
 });
