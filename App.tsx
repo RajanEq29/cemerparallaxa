@@ -5,6 +5,7 @@ import { Camera, CameraView } from 'expo-camera';
 import React, { useEffect, useRef, useState } from 'react';
 import { Dimensions, LogBox, Platform, StyleSheet, View } from 'react-native';
 import Canvas from 'react-native-canvas'
+import VideoWithmodelRe from './Screens/VideoWithmodelRe';
 
 const TensorCamera = cameraWithTensors(CameraView);
 
@@ -46,7 +47,7 @@ export default function App() {
       return;
     }
 
-    console.log(predictions);
+    console.log("----------->49",predictions);
 
     // to match the size of the camera preview
     const scaleWidth = width / nextImageTensor.shape[1];
@@ -104,19 +105,19 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const { status } = await Camera.requestCameraPermissionsAsync();
+      console.log("-------------------------->108",status)
       await tf.ready();
       setModel(await cocoSsd.load());
     })();
   }, []);
-  console.log(model?.data)
+  console.log("----------------->111",model?.model?.artifacts.modelTopology)
 
   return (
     <View style={styles.container}>
       <TensorCamera
-        // Standard Camera props
+       
         style={styles.camera}
    
-        // Tensor related props
         cameraTextureHeight={textureDims.height}
         cameraTextureWidth={textureDims.width}
         resizeHeight={200}
